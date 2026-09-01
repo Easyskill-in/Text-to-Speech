@@ -1,13 +1,9 @@
 import os
 import sys
-import io
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 import threading
-
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 from tts import TextToSpeech
 from video_generator import VideoGenerator
