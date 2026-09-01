@@ -4,11 +4,125 @@ import io
 import re
 import numpy as np
 import soundfile as sf
+from datetime import timedelta
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 from kokoro import KPipeline
+
+
+class YouTubeExtractor:
+    """Extract transcript and chapters from YouTube videos."""
+
+    def __init__(self):
+        self.api = None
+
+    def _get_api(self):
+        if self.api is None:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            self.api = YouTubeTranscriptApi()
+        return self.api
+
+    def extract_video_id(self, url_or_id):
+        """Extract video ID from URL or return if already an ID."""
+        patterns = [
+            r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
+            r'^([a-zA-Z0-9_-]{11})$',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, url_or_id.strip())
+            if match:
+                return match.group(1)
+        return None
+
+    def get_transcript(self, url_or_id, languages=None):
+        """Get transcript text from YouTube video."""
+        video_id = self.extract_video_id(url_or_id)
+        if not video_id:
+            raise ValueError(f"Could not extract video ID from: {url_or_id}")
+
+        api = self._get_api()
+
+        if languages is None:
+            languages = ['hi', 'en', 'hi-Latn']
+
+        try:
+            transcript = api.fetch(video_id, languages=languages)
+        except Exception:
+            try:
+                transcript_list = api.list(video_id)
+                transcript = transcript_list.find_transcript(['en'])
+            except Exception as e:
+                raise ValueError(f"No transcript found for video: {video_id}. Error: {e}")
+
+        full_text = ""
+        for snippet in transcript:
+            full_text += snippet.text + " "
+
+        return full_text.strip()
+
+    def get_transcript_with_timestamps(self, url_or_id, languages=None):
+        """Get transcript with timestamps for chapter splitting."""
+        video_id = self.extract_video_id(url_or_id)
+        if not video_id:
+            raise ValueError(f"Could not extract video ID from: {url_or_id}")
+
+        api = self._get_api()
+
+        if languages is None:
+            languages = ['hi', 'en', 'hi-Latn']
+
+        try:
+            transcript = api.fetch(video_id, languages=languages)
+        except Exception:
+            try:
+                transcript_list = api.list(video_id)
+                transcript = transcript_list.find_transcript(['en'])
+            except Exception as e:
+                raise ValueError(f"No transcript found for video: {video_id}. Error: {e}")
+
+        entries = []
+        for snippet in transcript:
+            entries.append({
+                'start': snippet.start,
+                'duration': snippet.duration,
+                'text': snippet.text,
+            })
+
+        return entries
+
+    def split_into_chapters(self, entries, max_chars=500):
+        """Split transcript into chapter-like segments."""
+        if not entries:
+            return []
+
+        chapters = []
+        current_text = ""
+        current_start = 0
+
+        for entry in entries:
+            if not current_text:
+                current_start = entry['start']
+
+            current_text += entry['text'] + " "
+
+            if len(current_text) >= max_chars:
+                chapters.append({
+                    'text': current_text.strip(),
+                    'timestamp': str(timedelta(seconds=int(current_start))),
+                    'start_seconds': current_start,
+                })
+                current_text = ""
+
+        if current_text.strip():
+            chapters.append({
+                'text': current_text.strip(),
+                'timestamp': str(timedelta(seconds=int(current_start))),
+                'start_seconds': current_start,
+            })
+
+        return chapters
 
 
 HINDI_WORDS = {
@@ -383,6 +497,7 @@ class TextToSpeech:
         self.pipelines = {}
         self.preprocessor = TextPreprocessor()
         self.hinglish_detector = HinglishDetector()
+        self.youtube = YouTubeExtractor()
         self.sample_rate = 24000
 
     def _get_pipeline(self, lang_code):
@@ -510,26 +625,86 @@ def main():
         print("  - Natural pauses based on punctuation")
         print("  - Emotional expression (happy, sad, serious, etc.)")
         print("  - Hinglish support (mixed Hindi-English)")
+        print("  - YouTube transcript extraction")
+        print("  - Chapter-wise script splitting")
         print("  - Multiple voice options")
         print("\nUsage:")
-        print("  python tts.py <text or file.txt> [output_file] [lang] [voice]")
+        print("  python tts.py <text or file.txt or YouTube URL> [output_file] [lang] [voice]")
+        print("\nYouTube Commands:")
+        print("  python tts.py --youtube <URL> [output_folder] [lang] [voice]")
+        print("  python tts.py --youtube-chapters <URL> [output_folder] [lang] [voice]")
         print("\nLanguages:")
         print("  en - English")
         print("  hi - Hindi")
         print("  hinglish - Mixed Hindi-English")
         print("\nVoices:")
-        print("  en: am_michael, af_heart, af_bella, af_nicole, am_adam, am_eric")
+        print("  en: am_michael, am_adam, am_eric, af_heart, af_bella, af_nicole")
         print("  hi: hm_omega")
+        print("  hinglish: am_michael, am_adam, am_eric, hm_omega")
         print("\nExamples:")
         print("  python tts.py 'Hello world' output.wav en")
-        print("  python tts.py 'Wow! This is amazing!' excited.wav en")
-        print("  python tts.py 'Aaj hum Python seekhenge' output.wav hinglish")
-        print("  python tts.py myfile.txt output.wav en am_michael")
+        print("  python tts.py --youtube https://youtu.be/xyz output.wav hinglish")
+        print("  python tts.py --youtube-chapters https://youtu.be/xyz output/ hinglish")
+        print("  python tts.py myfile.txt output.wav hinglish am_michael")
         print("\nInteractive mode:")
         print("  python tts.py --interactive")
         sys.exit(0)
 
-    if sys.argv[1] == "--interactive":
+    if sys.argv[1] == "--youtube":
+        url = sys.argv[2] if len(sys.argv) > 2 else None
+        output_file = sys.argv[3] if len(sys.argv) > 3 else "youtube_output.wav"
+        lang = sys.argv[4] if len(sys.argv) > 4 else None
+        voice = sys.argv[5] if len(sys.argv) > 5 else None
+
+        if not url:
+            print("Error: YouTube URL required")
+            sys.exit(1)
+
+        try:
+            print(f"Extracting transcript from: {url}")
+            text = tts.youtube.get_transcript(url)
+            print(f"Transcript extracted ({len(text)} chars)")
+
+            if not text:
+                print("Error: Empty transcript")
+                sys.exit(1)
+
+            result_file, detected_lang = tts.synthesize(text, output_file, lang, voice)
+            print(f"Generated: {result_file} (Language: {detected_lang})")
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    elif sys.argv[1] == "--youtube-chapters":
+        url = sys.argv[2] if len(sys.argv) > 2 else None
+        output_dir = sys.argv[3] if len(sys.argv) > 3 else "output"
+        lang = sys.argv[4] if len(sys.argv) > 4 else None
+        voice = sys.argv[5] if len(sys.argv) > 5 else None
+
+        if not url:
+            print("Error: YouTube URL required")
+            sys.exit(1)
+
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+
+            print(f"Extracting transcript from: {url}")
+            entries = tts.youtube.get_transcript_with_timestamps(url)
+            chapters = tts.youtube.split_into_chapters(entries)
+            print(f"Split into {len(chapters)} chapters")
+
+            for i, chapter in enumerate(chapters):
+                chapter_file = os.path.join(output_dir, f"chapter_{i+1:02d}.wav")
+                print(f"Generating chapter {i+1}/{len(chapters)} [{chapter['timestamp']}]...")
+                result_file, detected_lang = tts.synthesize(chapter['text'], chapter_file, lang, voice)
+                print(f"  Generated: {os.path.basename(result_file)}")
+
+            print(f"\nAll {len(chapters)} chapters generated in: {output_dir}")
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    elif sys.argv[1] == "--interactive":
         print("\nText-to-Speech Interactive Mode (Kokoro)")
         print("=" * 50)
         print("Type 'quit' to exit, 'lang' to change language")

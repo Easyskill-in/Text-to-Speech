@@ -4,7 +4,7 @@ import io
 import re
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 import subprocess
 
@@ -14,6 +14,109 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 import numpy as np
 import soundfile as sf
 from kokoro import KPipeline
+
+
+class YouTubeExtractor:
+    """Extract transcript and chapters from YouTube videos."""
+
+    def __init__(self):
+        self.api = None
+
+    def _get_api(self):
+        if self.api is None:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            self.api = YouTubeTranscriptApi()
+        return self.api
+
+    def extract_video_id(self, url_or_id):
+        patterns = [
+            r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})',
+            r'^([a-zA-Z0-9_-]{11})$',
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, url_or_id.strip())
+            if match:
+                return match.group(1)
+        return None
+
+    def get_transcript(self, url_or_id, languages=None):
+        video_id = self.extract_video_id(url_or_id)
+        if not video_id:
+            raise ValueError(f"Could not extract video ID from: {url_or_id}")
+
+        api = self._get_api()
+        if languages is None:
+            languages = ['hi', 'en', 'hi-Latn']
+
+        try:
+            transcript = api.fetch(video_id, languages=languages)
+        except Exception:
+            try:
+                transcript_list = api.list(video_id)
+                transcript = transcript_list.find_transcript(['en'])
+            except Exception as e:
+                raise ValueError(f"No transcript found for video: {video_id}. Error: {e}")
+
+        full_text = ""
+        for snippet in transcript:
+            full_text += snippet.text + " "
+        return full_text.strip()
+
+    def get_transcript_with_timestamps(self, url_or_id, languages=None):
+        video_id = self.extract_video_id(url_or_id)
+        if not video_id:
+            raise ValueError(f"Could not extract video ID from: {url_or_id}")
+
+        api = self._get_api()
+        if languages is None:
+            languages = ['hi', 'en', 'hi-Latn']
+
+        try:
+            transcript = api.fetch(video_id, languages=languages)
+        except Exception:
+            try:
+                transcript_list = api.list(video_id)
+                transcript = transcript_list.find_transcript(['en'])
+            except Exception as e:
+                raise ValueError(f"No transcript found for video: {video_id}. Error: {e}")
+
+        entries = []
+        for snippet in transcript:
+            entries.append({
+                'start': snippet.start,
+                'duration': snippet.duration,
+                'text': snippet.text,
+            })
+        return entries
+
+    def split_into_chapters(self, entries, max_chars=500):
+        if not entries:
+            return []
+
+        chapters = []
+        current_text = ""
+        current_start = 0
+
+        for entry in entries:
+            if not current_text:
+                current_start = entry['start']
+            current_text += entry['text'] + " "
+
+            if len(current_text) >= max_chars:
+                chapters.append({
+                    'text': current_text.strip(),
+                    'timestamp': str(timedelta(seconds=int(current_start))),
+                    'start_seconds': current_start,
+                })
+                current_text = ""
+
+        if current_text.strip():
+            chapters.append({
+                'text': current_text.strip(),
+                'timestamp': str(timedelta(seconds=int(current_start))),
+                'start_seconds': current_start,
+            })
+        return chapters
 
 
 HINDI_WORDS = {
@@ -311,6 +414,7 @@ class TTSApp:
         self.pipelines = {}
         self.preprocessor = TextPreprocessor()
         self.hinglish_detector = HinglishDetector()
+        self.youtube = YouTubeExtractor()
         self.sample_rate = 24000
 
         self.build_ui()
@@ -341,23 +445,48 @@ class TTSApp:
                         font=("Segoe UI", 9), padding=(10, 6))
         style.map("Secondary.TButton", background=[("active", self.accent_color)])
 
+        style.configure("YouTube.TButton", background="#cc0000", foreground="white",
+                        font=("Segoe UI", 9, "bold"), padding=(10, 6))
+        style.map("YouTube.TButton", background=[("active", "#990000")])
+
         style.configure("TCombobox", fieldbackground=self.card_color, background=self.card_color,
                         foreground=self.text_color, selectbackground=self.accent_color)
         style.configure("TCombobox", font=("Segoe UI", 10))
+
+        style.configure("TNotebook", background=self.bg_color)
+        style.configure("TNotebook.Tab", background=self.card_color, foreground=self.text_color,
+                        font=("Segoe UI", 10, "bold"), padding=(15, 8))
+        style.map("TNotebook.Tab", background=[("selected", self.accent_color)])
 
         main = ttk.Frame(self.root, padding=20)
         main.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(main, text="AI Voice Generator", style="Header.TLabel").pack(anchor="w")
-        ttk.Label(main, text="Powered by Kokoro TTS - English, Hindi & Hinglish support", style="Sub.TLabel").pack(anchor="w", pady=(0, 15))
+        ttk.Label(main, text="Powered by Kokoro TTS - English, Hindi & Hinglish", style="Sub.TLabel").pack(anchor="w", pady=(0, 10))
 
-        top_row = ttk.Frame(main, style="Card.TFrame")
+        notebook = ttk.Notebook(main)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        text_tab = ttk.Frame(notebook, padding=10)
+        notebook.add(text_tab, text="  Text Input  ")
+
+        youtube_tab = ttk.Frame(notebook, padding=10)
+        notebook.add(youtube_tab, text="  YouTube  ")
+
+        self._build_text_tab(text_tab)
+        self._build_youtube_tab(youtube_tab)
+
+        self.progress = ttk.Progressbar(main, mode='indeterminate')
+        self.last_output = None
+
+    def _build_text_tab(self, parent):
+        top_row = ttk.Frame(parent, style="Card.TFrame")
         top_row.pack(fill=tk.X, pady=(0, 10))
 
         lang_frame = ttk.Frame(top_row, style="Card.TFrame", padding=10)
         lang_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         ttk.Label(lang_frame, text="Language", style="Card.TLabel").pack(anchor="w")
-        self.lang_var = tk.StringVar(value="en")
+        self.lang_var = tk.StringVar(value="hinglish")
         self.lang_combo = ttk.Combobox(lang_frame, textvariable=self.lang_var,
                                         values=["en", "hi", "hinglish"], state="readonly", width=15)
         self.lang_combo.pack(fill=tk.X, pady=(5, 0))
@@ -368,8 +497,18 @@ class TTSApp:
         ttk.Label(voice_frame, text="Voice", style="Card.TLabel").pack(anchor="w")
         self.voice_var = tk.StringVar(value="Michael (Male)")
         self.voice_combo = ttk.Combobox(voice_frame, textvariable=self.voice_var,
-                                         values=list(self.voices_map["en"].keys()), state="readonly", width=20)
+                                         values=list(self.voices_map["hinglish"].keys()), state="readonly", width=20)
         self.voice_combo.pack(fill=tk.X, pady=(5, 0))
+
+        speed_frame = ttk.Frame(top_row, style="Card.TFrame", padding=10)
+        speed_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        ttk.Label(speed_frame, text="Speed", style="Card.TLabel").pack(anchor="w")
+        self.speed_var = tk.DoubleVar(value=1.0)
+        self.speed_scale = ttk.Scale(speed_frame, from_=0.5, to=2.0, variable=self.speed_var, orient=tk.HORIZONTAL)
+        self.speed_scale.pack(fill=tk.X, pady=(5, 0))
+        self.speed_label = ttk.Label(speed_frame, text="1.0x", style="Card.TLabel")
+        self.speed_label.pack(anchor="e")
+        self.speed_var.trace_add("write", self._update_speed_label)
 
         out_frame = ttk.Frame(top_row, style="Card.TFrame", padding=10)
         out_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
@@ -382,12 +521,12 @@ class TTSApp:
         ttk.Button(out_row, text="Browse", style="Secondary.TButton",
                    command=self.browse_output).pack(side=tk.RIGHT, padx=(5, 0))
 
-        text_card = ttk.Frame(main, style="Card.TFrame", padding=15)
+        text_card = ttk.Frame(parent, style="Card.TFrame", padding=15)
         text_card.pack(fill=tk.BOTH, expand=True, pady=(10, 10))
 
         text_header = ttk.Frame(text_card, style="Card.TFrame")
         text_header.pack(fill=tk.X, pady=(0, 8))
-        ttk.Label(text_header, text="Enter your text", style="Card.TLabel",
+        ttk.Label(text_header, text="Enter your script", style="Card.TLabel",
                   font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
         ttk.Button(text_header, text="Load .txt File", style="Secondary.TButton",
                    command=self.load_text_file).pack(side=tk.RIGHT)
@@ -397,13 +536,10 @@ class TTSApp:
                                    selectbackground=self.accent_color, relief=tk.FLAT,
                                    padx=12, pady=10, height=12)
         self.text_input.pack(fill=tk.BOTH, expand=True)
-        self.text_input.insert("1.0", "Hello, how are you today?\nI hope everything is going well!")
+        self.text_input.insert("1.0", "Aaj hum Python seekhenge.\nPehle variables samajhte hain!")
 
-        scrollbar = ttk.Scrollbar(self.text_input, command=self.text_input.yview)
-        self.text_input.configure(yscrollcommand=scrollbar.set)
-
-        btn_row = ttk.Frame(main, style="Card.TFrame")
-        btn_row.pack(fill=tk.X, pady=(0, 10))
+        btn_row = ttk.Frame(parent, style="Card.TFrame")
+        btn_row.pack(fill=tk.X, pady=(0, 5))
 
         self.generate_btn = ttk.Button(btn_row, text="Generate Speech", style="Accent.TButton",
                                         command=self.generate_speech)
@@ -420,9 +556,84 @@ class TTSApp:
         self.status_label = ttk.Label(btn_row, text="Ready", style="Status.TLabel")
         self.status_label.pack(side=tk.RIGHT)
 
-        self.progress = ttk.Progressbar(main, mode='indeterminate')
+    def _build_youtube_tab(self, parent):
+        url_card = ttk.Frame(parent, style="Card.TFrame", padding=15)
+        url_card.pack(fill=tk.X, pady=(0, 10))
 
-        self.last_output = None
+        ttk.Label(url_card, text="YouTube Video URL", style="Card.TLabel",
+                  font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(url_card, text="Paste YouTube URL - transcript automatically extract hoga", style="Card.TLabel",
+                  font=("Segoe UI", 9)).pack(anchor="w", pady=(2, 8))
+
+        url_row = ttk.Frame(url_card, style="Card.TFrame")
+        url_row.pack(fill=tk.X)
+        self.url_var = tk.StringVar()
+        url_entry = ttk.Entry(url_row, textvariable=self.url_var, font=("Segoe UI", 11))
+        url_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+
+        self.fetch_btn = ttk.Button(url_row, text="Fetch Transcript", style="YouTube.TButton",
+                                     command=self.fetch_youtube_transcript)
+        self.fetch_btn.pack(side=tk.RIGHT)
+
+        options_row = ttk.Frame(parent, style="Card.TFrame", padding=10)
+        options_row.pack(fill=tk.X, pady=(0, 10))
+
+        yt_lang_frame = ttk.Frame(options_row, style="Card.TFrame", padding=10)
+        yt_lang_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Label(yt_lang_frame, text="Language", style="Card.TLabel").pack(anchor="w")
+        self.yt_lang_var = tk.StringVar(value="hinglish")
+        ttk.Combobox(yt_lang_frame, textvariable=self.yt_lang_var,
+                     values=["en", "hi", "hinglish"], state="readonly", width=15).pack(fill=tk.X, pady=(5, 0))
+
+        yt_voice_frame = ttk.Frame(options_row, style="Card.TFrame", padding=10)
+        yt_voice_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Label(yt_voice_frame, text="Voice", style="Card.TLabel").pack(anchor="w")
+        self.yt_voice_var = tk.StringVar(value="Michael (Male)")
+        ttk.Combobox(yt_voice_frame, textvariable=self.yt_voice_var,
+                     values=list(self.voices_map["hinglish"].keys()), state="readonly", width=20).pack(fill=tk.X, pady=(5, 0))
+
+        yt_speed_frame = ttk.Frame(options_row, style="Card.TFrame", padding=10)
+        yt_speed_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Label(yt_speed_frame, text="Speed", style="Card.TLabel").pack(anchor="w")
+        self.yt_speed_var = tk.DoubleVar(value=1.0)
+        ttk.Scale(yt_speed_frame, from_=0.5, to=2.0, variable=self.yt_speed_var, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(5, 0))
+
+        mode_row = ttk.Frame(options_row, style="Card.TFrame", padding=10)
+        mode_row.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        ttk.Label(mode_row, text="Generate Mode", style="Card.TLabel").pack(anchor="w")
+        self.yt_mode_var = tk.StringVar(value="full")
+        ttk.Combobox(mode_row, textvariable=self.yt_mode_var,
+                     values=["full", "chapters"], state="readonly", width=15).pack(fill=tk.X, pady=(5, 0))
+
+        preview_card = ttk.Frame(parent, style="Card.TFrame", padding=15)
+        preview_card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        ttk.Label(preview_card, text="Transcript Preview", style="Card.TLabel",
+                  font=("Segoe UI", 11, "bold")).pack(anchor="w")
+
+        self.transcript_text = tk.Text(preview_card, wrap=tk.WORD, font=("Segoe UI", 10),
+                                        bg="#1e1e2e", fg=self.text_color, insertbackground=self.text_color,
+                                        selectbackground=self.accent_color, relief=tk.FLAT,
+                                        padx=12, pady=10, height=8, state=tk.DISABLED)
+        self.transcript_text.pack(fill=tk.BOTH, expand=True)
+
+        btn_row = ttk.Frame(parent, style="Card.TFrame")
+        btn_row.pack(fill=tk.X)
+
+        self.yt_generate_btn = ttk.Button(btn_row, text="Generate Voice from YouTube", style="Accent.TButton",
+                                           command=self.generate_from_youtube)
+        self.yt_generate_btn.pack(side=tk.LEFT, padx=(0, 10))
+        self.yt_generate_btn.config(state=tk.DISABLED)
+
+        self.yt_status_label = ttk.Label(btn_row, text="Paste URL and click Fetch", style="Status.TLabel")
+        self.yt_status_label.pack(side=tk.RIGHT)
+
+    def _update_speed_label(self, *args):
+        try:
+            val = self.speed_var.get()
+            self.speed_label.config(text=f"{val:.1f}x")
+        except Exception:
+            pass
 
     def on_lang_change(self, event=None):
         lang = self.lang_var.get()
@@ -473,6 +684,7 @@ class TTSApp:
             lang = self.lang_var.get()
             voice_name = self.voice_var.get()
             output_folder = self.out_var.get()
+            user_speed = self.speed_var.get()
 
             os.makedirs(output_folder, exist_ok=True)
             output_file = os.path.join(output_folder, self.generate_filename())
@@ -492,7 +704,7 @@ class TTSApp:
                     all_audio.append(silence)
 
                 seg_text = seg['text']
-                speed = seg['config'].get('speed', 1.0)
+                speed = seg['config'].get('speed', 1.0) * user_speed
 
                 if pipeline_lang == 'hinglish':
                     lang_segments = self.hinglish_detector.split_by_language(seg_text)
@@ -577,6 +789,164 @@ class TTSApp:
                 subprocess.run(["xdg-open", folder])
         else:
             messagebox.showinfo("Info", "Output folder does not exist yet.")
+
+    def fetch_youtube_transcript(self):
+        url = self.url_var.get().strip()
+        if not url:
+            messagebox.showwarning("Warning", "Please enter a YouTube URL first!")
+            return
+
+        self.fetch_btn.config(state=tk.DISABLED)
+        self.yt_status_label.config(text="Fetching transcript...")
+        self.progress.pack(fill=tk.X, pady=(10, 0))
+        self.progress.start()
+
+        thread = threading.Thread(target=self._fetch_transcript_thread, args=(url,), daemon=True)
+        thread.start()
+
+    def _fetch_transcript_thread(self, url):
+        try:
+            transcript = self.youtube.get_transcript(url)
+            self.yt_transcript = transcript
+            self.root.after(0, lambda: self._on_transcript_fetched(transcript))
+        except Exception as e:
+            self.root.after(0, lambda: self._on_transcript_error(str(e)))
+
+    def _on_transcript_fetched(self, transcript):
+        self.progress.stop()
+        self.progress.pack_forget()
+        self.fetch_btn.config(state=tk.NORMAL)
+        self.yt_generate_btn.config(state=tk.NORMAL)
+        self.yt_status_label.config(text=f"Transcript fetched ({len(transcript)} chars)")
+
+        self.transcript_text.config(state=tk.NORMAL)
+        self.transcript_text.delete("1.0", tk.END)
+        self.transcript_text.insert("1.0", transcript)
+        self.transcript_text.config(state=tk.DISABLED)
+
+    def _on_transcript_error(self, error):
+        self.progress.stop()
+        self.progress.pack_forget()
+        self.fetch_btn.config(state=tk.NORMAL)
+        self.yt_status_label.config(text="Error fetching transcript")
+        messagebox.showerror("Error", f"Could not fetch transcript:\n{error}")
+
+    def generate_from_youtube(self):
+        if not hasattr(self, 'yt_transcript') or not self.yt_transcript:
+            messagebox.showwarning("Warning", "Please fetch transcript first!")
+            return
+
+        self.yt_generate_btn.config(state=tk.DISABLED)
+        self.generate_btn.config(state=tk.DISABLED)
+        self.progress.pack(fill=tk.X, pady=(10, 0))
+        self.progress.start()
+        self.yt_status_label.config(text="Generating voice...")
+
+        thread = threading.Thread(target=self._generate_youtube_thread, daemon=True)
+        thread.start()
+
+    def _generate_youtube_thread(self):
+        try:
+            text = self.yt_transcript
+            lang = self.yt_lang_var.get()
+            voice_name = self.yt_voice_var.get()
+            speed = self.yt_speed_var.get()
+            mode = self.yt_mode_var.get()
+            output_folder = self.out_var.get()
+
+            os.makedirs(output_folder, exist_ok=True)
+
+            voice_id, pipeline_lang = self.voices_map[lang][voice_name]
+
+            if mode == "chapters":
+                entries = self.youtube.get_transcript_with_timestamps(self.url_var.get().strip())
+                chapters = self.youtube.split_into_chapters(entries)
+
+                for i, chapter in enumerate(chapters):
+                    chapter_file = os.path.join(output_folder, f"yt_chapter_{i+1:02d}.wav")
+                    self.root.after(0, lambda i=i: self.yt_status_label.config(
+                        text=f"Generating chapter {i+1}/{len(chapters)}..."))
+
+                    segments = self.preprocessor.process(chapter['text'])
+                    chapter_audio = self._synthesize_segments(segments, voice_id, pipeline_lang, speed)
+
+                    if len(chapter_audio) > 0:
+                        sf.write(chapter_file, chapter_audio, self.sample_rate)
+
+                self.last_output = os.path.join(output_folder, "yt_chapter_01.wav")
+                self.root.after(0, lambda: self._on_youtube_complete(f"{len(chapters)} chapters"))
+            else:
+                output_file = os.path.join(output_folder, self.generate_filename())
+
+                segments = self.preprocessor.process(text)
+                all_audio = self._synthesize_segments(segments, voice_id, pipeline_lang, speed)
+
+                if len(all_audio) > 0:
+                    sf.write(output_file, all_audio, self.sample_rate)
+                    self.last_output = output_file
+                    filename = os.path.basename(output_file)
+                    self.root.after(0, lambda: self._on_youtube_complete(filename))
+                else:
+                    self.root.after(0, lambda: messagebox.showwarning("Warning", "No audio generated"))
+
+        except Exception as e:
+            self.root.after(0, lambda: self._on_error(str(e)))
+
+    def _synthesize_segments(self, segments, voice_id, pipeline_lang, speed=1.0):
+        all_audio = []
+
+        for i, seg in enumerate(segments):
+            if seg['pause_before_ms'] > 0 and i > 0:
+                silence = np.zeros(int(self.sample_rate * seg['pause_before_ms'] / 1000), dtype=np.float32)
+                all_audio.append(silence)
+
+            seg_text = seg['text']
+            seg_speed = seg['config'].get('speed', 1.0) * speed
+
+            if pipeline_lang == 'hinglish':
+                lang_segments = self.hinglish_detector.split_by_language(seg_text)
+                for sub_seg in lang_segments:
+                    sub_text = sub_seg['text']
+                    sub_lang = sub_seg['lang']
+
+                    if sub_lang == 'hi':
+                        sub_voice = 'hm_omega'
+                        sub_pipeline_lang = 'h'
+                    else:
+                        sub_voice = 'am_michael'
+                        sub_pipeline_lang = 'a'
+
+                    try:
+                        pipeline = self._get_pipeline(sub_pipeline_lang)
+                        for gs, ps, audio in pipeline(sub_text, voice=sub_voice, speed=seg_speed):
+                            if len(audio) > 0:
+                                all_audio.append(audio)
+                    except Exception as e:
+                        print(f"Warning: sub-segment failed: {e}")
+            else:
+                try:
+                    pipeline = self._get_pipeline(pipeline_lang)
+                    for gs, ps, audio in pipeline(seg_text, voice=voice_id, speed=seg_speed):
+                        if len(audio) > 0:
+                            all_audio.append(audio)
+                except Exception as e:
+                    print(f"Warning: segment failed: {e}")
+
+            if seg['pause_after_ms'] > 0:
+                silence = np.zeros(int(self.sample_rate * seg['pause_after_ms'] / 1000), dtype=np.float32)
+                all_audio.append(silence)
+
+        if all_audio:
+            return np.concatenate(all_audio)
+        return np.array([], dtype=np.float32)
+
+    def _on_youtube_complete(self, result):
+        self.progress.stop()
+        self.progress.pack_forget()
+        self.generate_btn.config(state=tk.NORMAL)
+        self.yt_generate_btn.config(state=tk.NORMAL)
+        self.yt_status_label.config(text=f"Generated: {result}")
+        messagebox.showinfo("Done!", f"Voice generated from YouTube!\n\n{result}\nFolder: {self.out_var.get()}")
 
 
 def main():
