@@ -500,15 +500,17 @@ class TTSApp:
                                          values=list(self.voices_map["hinglish"].keys()), state="readonly", width=20)
         self.voice_combo.pack(fill=tk.X, pady=(5, 0))
 
-        speed_frame = ttk.Frame(top_row, style="Card.TFrame", padding=10)
-        speed_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
-        ttk.Label(speed_frame, text="Speed", style="Card.TLabel").pack(anchor="w")
-        self.speed_var = tk.DoubleVar(value=1.0)
-        self.speed_scale = ttk.Scale(speed_frame, from_=0.5, to=2.0, variable=self.speed_var, orient=tk.HORIZONTAL)
-        self.speed_scale.pack(fill=tk.X, pady=(5, 0))
-        self.speed_label = ttk.Label(speed_frame, text="1.0x", style="Card.TLabel")
-        self.speed_label.pack(anchor="e")
-        self.speed_var.trace_add("write", self._update_speed_label)
+        emotion_frame = ttk.Frame(top_row, style="Card.TFrame", padding=10)
+        emotion_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Label(emotion_frame, text="Emotion", style="Card.TLabel").pack(anchor="w")
+        self.emotion_var = tk.StringVar(value="auto")
+        self.emotion_combo = ttk.Combobox(emotion_frame, textvariable=self.emotion_var,
+                                           values=["auto", "neutral", "excited", "happy", "energetic",
+                                                   "sad", "serious", "dramatic", "whisper", "shout",
+                                                   "slow", "fast", "storytelling", "lecture",
+                                                   "conversational", "question", "surprise"],
+                                           state="readonly", width=15)
+        self.emotion_combo.pack(fill=tk.X, pady=(5, 0))
 
         out_frame = ttk.Frame(top_row, style="Card.TFrame", padding=10)
         out_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
@@ -521,8 +523,35 @@ class TTSApp:
         ttk.Button(out_row, text="Browse", style="Secondary.TButton",
                    command=self.browse_output).pack(side=tk.RIGHT, padx=(5, 0))
 
+        controls_frame = ttk.Frame(parent, style="Card.TFrame", padding=10)
+        controls_frame.pack(fill=tk.X, pady=(0, 10))
+
+        speed_frame = ttk.Frame(controls_frame, style="Card.TFrame", padding=5)
+        speed_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Label(speed_frame, text="Speed", style="Card.TLabel").pack(anchor="w")
+        self.speed_var = tk.DoubleVar(value=1.0)
+        ttk.Scale(speed_frame, from_=0.5, to=2.0, variable=self.speed_var, orient=tk.HORIZONTAL).pack(fill=tk.X)
+        self.speed_label = ttk.Label(speed_frame, text="1.0x", style="Card.TLabel")
+        self.speed_label.pack(anchor="e")
+        self.speed_var.trace_add("write", self._update_speed_label)
+
+        pause_frame = ttk.Frame(controls_frame, style="Card.TFrame", padding=5)
+        pause_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        ttk.Label(pause_frame, text="Pause Between Sentences", style="Card.TLabel").pack(anchor="w")
+        self.pause_var = tk.DoubleVar(value=1.0)
+        ttk.Scale(pause_frame, from_=0.0, to=3.0, variable=self.pause_var, orient=tk.HORIZONTAL).pack(fill=tk.X)
+        self.pause_label = ttk.Label(pause_frame, text="1.0x", style="Card.TLabel")
+        self.pause_label.pack(anchor="e")
+        self.pause_var.trace_add("write", self._update_pause_label)
+
+        emphasis_frame = ttk.Frame(controls_frame, style="Card.TFrame", padding=5)
+        emphasis_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+        ttk.Label(emphasis_frame, text="Emphasis", style="Card.TLabel").pack(anchor="w")
+        self.emphasis_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(emphasis_frame, text="Enable emphasis", variable=self.emphasis_var).pack(anchor="w", pady=(5, 0))
+
         text_card = ttk.Frame(parent, style="Card.TFrame", padding=15)
-        text_card.pack(fill=tk.BOTH, expand=True, pady=(10, 10))
+        text_card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
         text_header = ttk.Frame(text_card, style="Card.TFrame")
         text_header.pack(fill=tk.X, pady=(0, 8))
@@ -534,7 +563,7 @@ class TTSApp:
         self.text_input = tk.Text(text_card, wrap=tk.WORD, font=("Segoe UI", 11),
                                    bg="#1e1e2e", fg=self.text_color, insertbackground=self.text_color,
                                    selectbackground=self.accent_color, relief=tk.FLAT,
-                                   padx=12, pady=10, height=12)
+                                   padx=12, pady=10, height=10)
         self.text_input.pack(fill=tk.BOTH, expand=True)
         self.text_input.insert("1.0", "Aaj hum Python seekhenge.\nPehle variables samajhte hain!")
 
@@ -635,6 +664,13 @@ class TTSApp:
         except Exception:
             pass
 
+    def _update_pause_label(self, *args):
+        try:
+            val = self.pause_var.get()
+            self.pause_label.config(text=f"{val:.1f}x")
+        except Exception:
+            pass
+
     def on_lang_change(self, event=None):
         lang = self.lang_var.get()
         voices = list(self.voices_map[lang].keys())
@@ -685,6 +721,9 @@ class TTSApp:
             voice_name = self.voice_var.get()
             output_folder = self.out_var.get()
             user_speed = self.speed_var.get()
+            user_pause = self.pause_var.get()
+            user_emphasis = self.emphasis_var.get()
+            user_emotion = self.emotion_var.get()
 
             os.makedirs(output_folder, exist_ok=True)
             output_file = os.path.join(output_folder, self.generate_filename())
@@ -699,12 +738,18 @@ class TTSApp:
             all_audio = []
 
             for i, seg in enumerate(segments):
-                if seg['pause_before_ms'] > 0 and i > 0:
-                    silence = np.zeros(int(self.sample_rate * seg['pause_before_ms'] / 1000), dtype=np.float32)
+                pause_ms = int(seg['pause_before_ms'] * user_pause)
+                if pause_ms > 0 and i > 0:
+                    silence = np.zeros(int(self.sample_rate * pause_ms / 1000), dtype=np.float32)
                     all_audio.append(silence)
 
                 seg_text = seg['text']
-                speed = seg['config'].get('speed', 1.0) * user_speed
+
+                if user_emotion != "auto":
+                    emotion_config = self.preprocessor.get_emotion_config(user_emotion)
+                    speed = emotion_config.get('speed', 1.0) * user_speed
+                else:
+                    speed = seg['config'].get('speed', 1.0) * user_speed
 
                 if pipeline_lang == 'hinglish':
                     lang_segments = self.hinglish_detector.split_by_language(seg_text)
@@ -735,8 +780,9 @@ class TTSApp:
                     except Exception as e:
                         print(f"Warning: segment failed: {e}")
 
-                if seg['pause_after_ms'] > 0:
-                    silence = np.zeros(int(self.sample_rate * seg['pause_after_ms'] / 1000), dtype=np.float32)
+                pause_after_ms = int(seg['pause_after_ms'] * user_pause)
+                if pause_after_ms > 0:
+                    silence = np.zeros(int(self.sample_rate * pause_after_ms / 1000), dtype=np.float32)
                     all_audio.append(silence)
 
             if not all_audio:

@@ -386,15 +386,24 @@ class TextPreprocessor:
 
     def get_emotion_config(self, emotion):
         configs = {
-            'excited': {'speed': 1.15, 'pause_ms': 250},
-            'energetic': {'speed': 1.1, 'pause_ms': 300},
-            'question': {'speed': 1.0, 'pause_ms': 350},
-            'sad': {'speed': 0.85, 'pause_ms': 450},
-            'serious': {'speed': 1.05, 'pause_ms': 350},
-            'serious_warning': {'speed': 1.1, 'pause_ms': 400},
-            'surprise': {'speed': 1.1, 'pause_ms': 500},
-            'dramatic_pause': {'speed': 0.95, 'pause_ms': 700},
-            'neutral': {'speed': 1.0, 'pause_ms': 200},
+            'excited': {'speed': 1.2, 'pause_ms': 200, 'emphasis': True},
+            'energetic': {'speed': 1.15, 'pause_ms': 250, 'emphasis': True},
+            'happy': {'speed': 1.1, 'pause_ms': 200, 'emphasis': False},
+            'question': {'speed': 1.0, 'pause_ms': 350, 'emphasis': False},
+            'sad': {'speed': 0.8, 'pause_ms': 500, 'emphasis': False},
+            'serious': {'speed': 1.05, 'pause_ms': 350, 'emphasis': True},
+            'serious_warning': {'speed': 1.1, 'pause_ms': 400, 'emphasis': True},
+            'surprise': {'speed': 1.15, 'pause_ms': 450, 'emphasis': True},
+            'dramatic_pause': {'speed': 0.9, 'pause_ms': 800, 'emphasis': False},
+            'whisper': {'speed': 0.85, 'pause_ms': 400, 'emphasis': False},
+            'shout': {'speed': 1.25, 'pause_ms': 200, 'emphasis': True},
+            'slow': {'speed': 0.75, 'pause_ms': 500, 'emphasis': False},
+            'fast': {'speed': 1.4, 'pause_ms': 150, 'emphasis': False},
+            'dramatic': {'speed': 0.95, 'pause_ms': 600, 'emphasis': True},
+            'storytelling': {'speed': 0.95, 'pause_ms': 450, 'emphasis': False},
+            'lecture': {'speed': 1.0, 'pause_ms': 350, 'emphasis': True},
+            'conversational': {'speed': 1.0, 'pause_ms': 300, 'emphasis': False},
+            'neutral': {'speed': 1.0, 'pause_ms': 200, 'emphasis': False},
         }
         return configs.get(emotion, configs['neutral'])
 
