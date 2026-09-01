@@ -1,19 +1,176 @@
 import os
 import sys
 import io
+import re
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
 import threading
 import subprocess
-import wave
-import struct
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-from piper import PiperVoice
-from piper.config import SynthesisConfig
+import numpy as np
+import soundfile as sf
+from kokoro import KPipeline
+
+
+HINDI_WORDS = {
+    'hai', 'ho', 'hum', 'aap', 'tum', 'mein', 'mera', 'teri', 'uska', 'yeh',
+    'voh', 'kya', 'kaise', 'kahan', 'kyun', 'kaun', 'ab', 'yahan', 'wahan',
+    'se', 'ko', 'ka', 'ki', 'ke', 'ne', 'pe', 'par', 'me', 'mai', 'main',
+    'aur', 'ya', 'lekin', 'parantu', 'magar', 'kyunki', 'isliye', 'to',
+    'phir', 'bhi', 'hi', 'jo', 'jaise', 'taki', 'tak', 'dusre', 'doosre',
+    'ek', 'do', 'teen', 'chaar', 'paanch', 'che', 'saat', 'aath', 'nau', 'dus',
+    'bada', 'chota', 'accha', 'bura', 'sundar', 'ghar', 'kaam', 'paani',
+    'duniya', 'zindagi', 'shandar', 'kamaal', 'zabardast', 'dhamakedar',
+    'maza', 'masti', 'dhamaal', 'dhasu', 'bawaal', 'lajawab',
+    'padhai', 'likhai', 'padhna', 'likhna', 'bolna', 'sunna', 'dekhna',
+    'janna', 'aana', 'jaana', 'karna', 'hona',
+    'dekho', 'suno', 'bolo', 'aao', 'jao', 'karo', 'bano', 'raho',
+    'nahi', 'haan', 'bilkul', 'zaroor', 'pakka',
+    'shuru', 'khatam', 'aage', 'peeche', 'upar', 'neeche', 'andar',
+    'bahar', 'paas', 'door', 'saath', 'alag', 'sab', 'kuch',
+}
+
+TECH_WORDS = {
+    'python', 'javascript', 'typescript', 'java', 'c++', 'c#', 'ruby',
+    'html', 'css', 'react', 'angular', 'vue', 'node', 'npm', 'pip',
+    'django', 'flask', 'fastapi', 'spring', 'laravel', 'rails',
+    'function', 'variable', 'class', 'object', 'array', 'string', 'integer',
+    'boolean', 'loop', 'if', 'else', 'elif', 'return', 'import', 'from',
+    'def', 'print', 'list', 'dict', 'tuple', 'set', 'int', 'float', 'str',
+    'bool', 'true', 'false', 'none', 'null', 'undefined', 'try', 'except',
+    'catch', 'throw', 'error', 'exception', 'async', 'await', 'yield',
+    'lambda', 'map', 'filter', 'reduce', 'enumerate', 'zip', 'range',
+    'len', 'append', 'extend', 'insert', 'remove', 'pop', 'index',
+    'sort', 'reverse', 'copy', 'clear', 'update', 'keys', 'values', 'items',
+    'get', 'set', 'has', 'is', 'in', 'not', 'and', 'or', 'for', 'while',
+    'break', 'continue', 'pass', 'global', 'nonlocal', 'del', 'assert',
+    'with', 'as', 'try', 'finally', 'raise', 'from', 'import',
+    'file', 'open', 'read', 'write', 'close', 'seek', 'tell', 'flush',
+    'input', 'output', 'stream', 'buffer', 'socket', 'server', 'client',
+    'api', 'rest', 'graphql', 'http', 'https', 'url', 'request', 'response',
+    'database', 'db', 'sql', 'mysql', 'postgres', 'sqlite', 'mongo', 'redis',
+    'array', 'linked', 'tree', 'graph', 'stack', 'queue', 'hash', 'map',
+    'algorithm', 'recursion', 'iteration', 'binary', 'search', 'sort',
+    'merge', 'quick', 'heap', 'bubble', 'selection', 'insertion',
+    'stack', 'heap', 'memory', 'cpu', 'gpu', 'thread', 'process',
+    'compile', 'interpret', 'runtime', 'debug', 'test', 'deploy',
+    'git', 'github', 'gitlab', 'bitbucket', 'docker', 'kubernetes', 'k8s',
+    'aws', 'azure', 'gcp', 'cloud', 'serverless', 'lambda',
+    'machine', 'learning', 'ai', 'ml', 'dl', 'neural', 'network',
+    'model', 'train', 'predict', 'data', 'dataset', 'batch', 'epoch',
+    'loss', 'accuracy', 'precision', 'recall', 'f1', 'score',
+    'tensor', 'numpy', 'pandas', 'scipy', 'sklearn', 'pytorch', 'tensorflow',
+    'keras', 'opencv', 'nlp', 'cv', 'computer', 'vision',
+    'web', 'frontend', 'backend', 'fullstack', 'devops', 'ci', 'cd',
+    'agile', 'scrum', 'sprint', 'backlog', 'ticket', 'story',
+    'code', 'coding', 'programming', 'developer', 'engineer', 'software',
+    'bug', 'fix', 'issue', 'feature', 'release', 'version', 'update',
+    'package', 'library', 'framework', 'module', 'plugin', 'extension',
+    'ide', 'vscode', 'vim', 'emacs', 'terminal', 'console', 'shell',
+    'bash', 'powershell', 'cmd', 'command', 'script', 'automation',
+    'api', 'json', 'xml', 'yaml', 'toml', 'csv', 'excel',
+    'index', 'key', 'value', 'pair', 'entry', 'record', 'field',
+    'type', 'interface', 'struct', 'enum', 'const', 'let', 'var',
+    'scope', 'closure', 'callback', 'event', 'listener', 'handler',
+    'promise', 'observable', 'stream', 'pipe', 'filter', 'map',
+    'reduce', 'iterate', 'loop', 'recurse', 'stack', 'queue',
+}
+
+ROMAN_HINDI_PATTERNS = [
+    r'(?:main|mai)\s+(?:aap|tum|hum)',
+    r'(?:kya|kaise|kahan|kyun|kaun)',
+    r'(?:hai|ho|hoon|hain)',
+    r'(?:nahi|na)',
+    r'(?:aur|ya|lekin)',
+    r'(?:yeh|voh|woh)',
+    r'(?:ko|ka|ki|ke|se|ne|pe|me)',
+    r'(?:karo|karna|karta|karti|kiye|kiya)',
+    r'(?:bolo|bolna|bolta|boli)',
+    r'(?:aao|aana|aata|aati)',
+    r'(?:jao|jana|jata|jati)',
+    r'(?:dekho|dekhna|dekhta|dekhti)',
+    r'(?:padho|padhna|padhta|padhti)',
+    r'(?:likho|likhna|likhta|likhti)',
+    r'(?:suno|sunna|sunta|sunti)',
+    r'(?:raho|rahna|rahata|rahiti)',
+    r'(?:bano|banna|banta|banti)',
+    r'(?:kuch|sab|yahan|wahan|tahan)',
+    r'(?:ab|abhi|tab|tabhi|phir)',
+    r'(?:bhi|hi|se|pe|ke|ko|ka|ki|ne|me)',
+]
+
+
+class HinglishDetector:
+    def __init__(self):
+        self.roman_hindi_re = re.compile('|'.join(ROMAN_HINDI_PATTERNS))
+
+    def detect_word(self, word):
+        word_lower = word.lower().strip('.,!?;:"')
+        if not word_lower:
+            return 'en'
+        if any('\u0900' <= c <= '\u097F' for c in word_lower):
+            return 'hi'
+        if word_lower in TECH_WORDS:
+            return 'en'
+        if word_lower in HINDI_WORDS:
+            return 'hi'
+        if self.roman_hindi_re.match(word_lower):
+            return 'hi'
+        return 'en'
+
+    def detect_sentence_language(self, text):
+        words = text.split()
+        if not words:
+            return 'en'
+        hi_count = sum(1 for w in words if self.detect_word(w) == 'hi')
+        en_count = sum(1 for w in words if self.detect_word(w) == 'en')
+        if hi_count > en_count:
+            return 'hi'
+        return 'en'
+
+    def split_by_language(self, text):
+        words = text.split()
+        if not words:
+            return [{'text': text, 'lang': 'en'}]
+
+        segments = []
+        current_segment = []
+        current_lang = None
+
+        for word in words:
+            word_lang = self.detect_word(word)
+            if current_lang is None:
+                current_lang = word_lang
+                current_segment.append(word)
+            elif word_lang == current_lang:
+                current_segment.append(word)
+            else:
+                if current_segment:
+                    segments.append({
+                        'text': ' '.join(current_segment),
+                        'lang': current_lang,
+                    })
+                current_segment = [word]
+                current_lang = word_lang
+
+        if current_segment:
+            segments.append({
+                'text': ' '.join(current_segment),
+                'lang': current_lang,
+            })
+
+        merged = []
+        for seg in segments:
+            if merged and merged[-1]['lang'] == seg['lang']:
+                merged[-1]['text'] += ' ' + seg['text']
+            else:
+                merged.append(seg.copy())
+
+        return merged
 
 
 class TextPreprocessor:
@@ -39,9 +196,9 @@ class TextPreprocessor:
         'wait', 'really', 'what', 'seriously', 'actually', 'literally',
         'unbelievable', 'impossible', 'insane', 'crazy', 'shocking',
     }
-    HINDI_EXCITED = {'\u0936\u093E\u0928\u094D\u0926\u093E\u0930', '\u0915\u094D\u092E\u093E\u0932', '\u092c\u0939\u0941\u0924 \u0939\u0948'}
-    HINDI_SAD = {'\u0926\u0941\u0903\u0915', '\u092e\u093e\u0924\u092E', '\u0916\u0947\u0926'}
-    sample_rate = 22050
+    HINDI_EXCITED = {'शानदार', 'कमाल', 'बहुत अच्छा', 'ज़बरदस्त'}
+    HINDI_SAD = {'दुख', 'मातम', 'खेद', 'परेशान'}
+    sample_rate = 24000
 
     def detect_emotion(self, sentence):
         text_lower = sentence.lower().strip()
@@ -49,7 +206,7 @@ class TextPreprocessor:
         has_question = '?' in text_lower
         has_ellipsis = '...' in text_lower
         words = set(text_lower.split())
-        hindi_words = set(__import__('re').findall(r'[\u0900-\u097F]+', sentence))
+        hindi_words = set(re.findall(r'[\u0900-\u097F]+', sentence))
 
         excited_score = len(words & self.EXCITED_WORDS) + len(hindi_words & self.HINDI_EXCITED)
         sad_score = len(words & self.SAD_WORDS) + len(hindi_words & self.HINDI_SAD)
@@ -66,19 +223,18 @@ class TextPreprocessor:
 
     def get_emotion_config(self, emotion):
         configs = {
-            'excited': {'length_scale': 0.88, 'volume': 1.15, 'noise_scale': 0.667, 'pause_ms': 250},
-            'energetic': {'length_scale': 0.92, 'volume': 1.1, 'noise_scale': 0.667, 'pause_ms': 300},
-            'question': {'length_scale': 0.95, 'volume': 1.0, 'noise_scale': 0.667, 'pause_ms': 350},
-            'sad': {'length_scale': 1.12, 'volume': 0.85, 'noise_scale': 0.667, 'pause_ms': 450},
-            'serious': {'length_scale': 0.93, 'volume': 1.05, 'noise_scale': 0.667, 'pause_ms': 350},
-            'serious_warning': {'length_scale': 0.85, 'volume': 1.2, 'noise_scale': 0.667, 'pause_ms': 400},
-            'dramatic_pause': {'length_scale': 1.05, 'volume': 0.95, 'noise_scale': 0.667, 'pause_ms': 700},
-            'neutral': {'length_scale': 1.0, 'volume': 1.0, 'noise_scale': 0.667, 'pause_ms': 200},
+            'excited': {'speed': 1.15, 'pause_ms': 250},
+            'energetic': {'speed': 1.1, 'pause_ms': 300},
+            'question': {'speed': 1.0, 'pause_ms': 350},
+            'sad': {'speed': 0.85, 'pause_ms': 450},
+            'serious': {'speed': 1.05, 'pause_ms': 350},
+            'serious_warning': {'speed': 1.1, 'pause_ms': 400},
+            'dramatic_pause': {'speed': 0.95, 'pause_ms': 700},
+            'neutral': {'speed': 1.0, 'pause_ms': 200},
         }
         return configs.get(emotion, configs['neutral'])
 
     def split_sentences(self, text):
-        import re
         text = text.strip()
         if not text: return []
         paragraphs = re.split(r'\n\s*\n', text)
@@ -114,7 +270,7 @@ class TextPreprocessor:
 class TTSApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AI Voice Generator")
+        self.root.title("AI Voice Generator - Kokoro TTS")
         self.root.geometry("900x750")
         self.root.minsize(800, 650)
 
@@ -129,42 +285,37 @@ class TTSApp:
 
         self.root.configure(bg=self.bg_color)
 
-        self.models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
         self.output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
         os.makedirs(self.output_dir, exist_ok=True)
 
-        self.voices = {
+        self.voices_map = {
             "en": {
-                "default (Lessac)": {
-                    "model": os.path.join(self.models_dir, "en", "en_US", "lessac", "medium", "en_US-lessac-medium.onnx"),
-                    "config": os.path.join(self.models_dir, "en", "en_US", "lessac", "medium", "en_US-lessac-medium.onnx.json"),
-                },
-                "amy": {
-                    "model": os.path.join(self.models_dir, "en", "en_US", "amy", "medium", "en_US-amy-medium.onnx"),
-                    "config": os.path.join(self.models_dir, "en", "en_US", "amy", "medium", "en_US-amy-medium.onnx.json"),
-                },
-                "libritts": {
-                    "model": os.path.join(self.models_dir, "en", "en_US", "libritts_r", "medium", "en_US-libritts_r-medium.onnx"),
-                    "config": os.path.join(self.models_dir, "en", "en_US", "libritts_r", "medium", "en_US-libritts_r-medium.onnx.json"),
-                },
+                "Michael (Male)": ("am_michael", "a"),
+                "Adam (Male)": ("am_adam", "a"),
+                "Eric (Male)": ("am_eric", "a"),
+                "Heart (Female)": ("af_heart", "a"),
+                "Bella (Female)": ("af_bella", "a"),
+                "Nicole (Female)": ("af_nicole", "a"),
             },
             "hi": {
-                "default (Pratham)": {
-                    "model": os.path.join(self.models_dir, "hi", "hi_IN", "pratham", "medium", "hi_IN-pratham-medium.onnx"),
-                    "config": os.path.join(self.models_dir, "hi", "hi_IN", "pratham", "medium", "hi_IN-pratham-medium.onnx.json"),
-                },
-                "priyamvada": {
-                    "model": os.path.join(self.models_dir, "hi", "hi_IN", "priyamvada", "medium", "hi_IN-priyamvada-medium.onnx"),
-                    "config": os.path.join(self.models_dir, "hi", "hi_IN", "priyamvada", "medium", "hi_IN-priyamvada-medium.onnx.json"),
-                },
+                "Omega (Male)": ("hm_omega", "h"),
+            },
+            "hinglish": {
+                "Michael + Omega": ("am_michael", "hinglish"),
             },
         }
 
-        self.loaded_voices = {}
+        self.pipelines = {}
         self.preprocessor = TextPreprocessor()
-        self.sample_rate = 22050
+        self.hinglish_detector = HinglishDetector()
+        self.sample_rate = 24000
 
         self.build_ui()
+
+    def _get_pipeline(self, lang_code):
+        if lang_code not in self.pipelines:
+            self.pipelines[lang_code] = KPipeline(lang_code=lang_code)
+        return self.pipelines[lang_code]
 
     def build_ui(self):
         style = ttk.Style()
@@ -195,7 +346,7 @@ class TTSApp:
         main.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(main, text="AI Voice Generator", style="Header.TLabel").pack(anchor="w")
-        ttk.Label(main, text="Type or paste text, choose language & voice, generate speech", style="Sub.TLabel").pack(anchor="w", pady=(0, 15))
+        ttk.Label(main, text="Powered by Kokoro TTS - English, Hindi & Hinglish support", style="Sub.TLabel").pack(anchor="w", pady=(0, 15))
 
         top_row = ttk.Frame(main, style="Card.TFrame")
         top_row.pack(fill=tk.X, pady=(0, 10))
@@ -205,16 +356,16 @@ class TTSApp:
         ttk.Label(lang_frame, text="Language", style="Card.TLabel").pack(anchor="w")
         self.lang_var = tk.StringVar(value="en")
         self.lang_combo = ttk.Combobox(lang_frame, textvariable=self.lang_var,
-                                        values=list(self.voices.keys()), state="readonly", width=15)
+                                        values=["en", "hi", "hinglish"], state="readonly", width=15)
         self.lang_combo.pack(fill=tk.X, pady=(5, 0))
         self.lang_combo.bind("<<ComboboxSelected>>", self.on_lang_change)
 
         voice_frame = ttk.Frame(top_row, style="Card.TFrame", padding=10)
         voice_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         ttk.Label(voice_frame, text="Voice", style="Card.TLabel").pack(anchor="w")
-        self.voice_var = tk.StringVar(value="default (Lessac)")
+        self.voice_var = tk.StringVar(value="Michael (Male)")
         self.voice_combo = ttk.Combobox(voice_frame, textvariable=self.voice_var,
-                                         values=list(self.voices["en"].keys()), state="readonly", width=20)
+                                         values=list(self.voices_map["en"].keys()), state="readonly", width=20)
         self.voice_combo.pack(fill=tk.X, pady=(5, 0))
 
         out_frame = ttk.Frame(top_row, style="Card.TFrame", padding=10)
@@ -272,9 +423,9 @@ class TTSApp:
 
     def on_lang_change(self, event=None):
         lang = self.lang_var.get()
-        voice_list = list(self.voices[lang].keys())
-        self.voice_combo['values'] = voice_list
-        self.voice_var.set(voice_list[0])
+        voices = list(self.voices_map[lang].keys())
+        self.voice_combo['values'] = voices
+        self.voice_var.set(voices[0])
 
     def browse_output(self):
         folder = filedialog.askdirectory(initialdir=self.output_dir)
@@ -323,71 +474,62 @@ class TTSApp:
             os.makedirs(output_folder, exist_ok=True)
             output_file = os.path.join(output_folder, self.generate_filename())
 
-            voice = self.load_voice(lang, voice_name)
-            segments = self.preprocessor.process(text)
+            voice_id, pipeline_lang = self.voices_map[lang][voice_name]
 
+            segments = self.preprocessor.process(text)
             if not segments:
                 self.root.after(0, lambda: messagebox.showwarning("Warning", "No text to synthesize"))
                 return
 
-            all_samples = []
-            sample_width = 2
-            channels = 1
-            rate = self.sample_rate
+            all_audio = []
 
             for i, seg in enumerate(segments):
                 if seg['pause_before_ms'] > 0 and i > 0:
-                    silence = [0] * int(self.sample_rate * seg['pause_before_ms'] / 1000)
-                    all_samples.extend(silence)
+                    silence = np.zeros(int(self.sample_rate * seg['pause_before_ms'] / 1000), dtype=np.float32)
+                    all_audio.append(silence)
 
-                syn_config = SynthesisConfig(
-                    length_scale=seg['config'].get('length_scale', 1.0),
-                    noise_scale=seg['config'].get('noise_scale', 0.667),
-                    volume=seg['config'].get('volume', 1.0),
-                )
+                seg_text = seg['text']
+                speed = seg['config'].get('speed', 1.0)
 
-                import io as _io
-                buf = _io.BytesIO()
-                with wave.open(buf, 'wb') as w:
-                    voice.synthesize_wav(seg['text'], w, syn_config=syn_config)
+                if pipeline_lang == 'hinglish':
+                    lang_segments = self.hinglish_detector.split_by_language(seg_text)
+                    for sub_seg in lang_segments:
+                        sub_text = sub_seg['text']
+                        sub_lang = sub_seg['lang']
 
-                buf.seek(0)
-                with wave.open(buf, 'rb') as w:
-                    frames = w.readframes(w.getnframes())
-                    sw = w.getsampwidth()
-                    ch = w.getnchannels()
-                    rt = w.getframerate()
+                        if sub_lang == 'hi':
+                            sub_voice = 'hm_omega'
+                            sub_pipeline_lang = 'h'
+                        else:
+                            sub_voice = 'am_michael'
+                            sub_pipeline_lang = 'a'
 
-                if sw == 2:
-                    fmt = f"<{len(frames) // 2}h"
-                    samples = list(struct.unpack(fmt, frames))
+                        try:
+                            pipeline = self._get_pipeline(sub_pipeline_lang)
+                            for gs, ps, audio in pipeline(sub_text, voice=sub_voice, speed=speed):
+                                if len(audio) > 0:
+                                    all_audio.append(audio)
+                        except Exception as e:
+                            print(f"Warning: sub-segment failed: {e}")
                 else:
-                    samples = list(struct.unpack(f"<{len(frames)}b", frames))
-
-                all_samples.extend(samples)
-                rate = rt
-                channels = ch
-                sample_width = sw
+                    try:
+                        pipeline = self._get_pipeline(pipeline_lang)
+                        for gs, ps, audio in pipeline(seg_text, voice=voice_id, speed=speed):
+                            if len(audio) > 0:
+                                all_audio.append(audio)
+                    except Exception as e:
+                        print(f"Warning: segment failed: {e}")
 
                 if seg['pause_after_ms'] > 0:
-                    silence = [0] * int(self.sample_rate * seg['pause_after_ms'] / 1000)
-                    all_samples.extend(silence)
+                    silence = np.zeros(int(self.sample_rate * seg['pause_after_ms'] / 1000), dtype=np.float32)
+                    all_audio.append(silence)
 
-            if sample_width == 2:
-                max_val = 32767
-                fmt = f"<{len(all_samples)}h"
-            else:
-                max_val = 127
-                fmt = f"<{len(all_samples)}b"
+            if not all_audio:
+                self.root.after(0, lambda: messagebox.showwarning("Warning", "No audio generated"))
+                return
 
-            clamped = [max(-max_val, min(max_val, int(s))) for s in all_samples]
-            audio_data = struct.pack(fmt, *clamped)
-
-            with wave.open(output_file, 'wb') as wav_file:
-                wav_file.setnchannels(channels)
-                wav_file.setsampwidth(sample_width)
-                wav_file.setframerate(rate)
-                wav_file.writeframes(audio_data)
+            final_audio = np.concatenate(all_audio)
+            sf.write(output_file, final_audio, self.sample_rate)
 
             self.last_output = output_file
             filename = os.path.basename(output_file)
@@ -409,17 +551,6 @@ class TTSApp:
         self.generate_btn.config(state=tk.NORMAL)
         self.status_label.config(text="Error occurred")
         messagebox.showerror("Error", f"Generation failed:\n{error}")
-
-    def load_voice(self, lang, variant):
-        key = f"{lang}_{variant}"
-        if key not in self.loaded_voices:
-            voice_config = self.voices.get(lang, {}).get(variant)
-            if not voice_config:
-                raise ValueError(f"Voice not available: {variant}")
-            if not os.path.exists(voice_config["model"]):
-                raise FileNotFoundError(f"Model not found: {voice_config['model']}")
-            self.loaded_voices[key] = PiperVoice.load(voice_config["model"], voice_config["config"])
-        return self.loaded_voices[key]
 
     def play_last(self):
         if self.last_output and os.path.exists(self.last_output):
