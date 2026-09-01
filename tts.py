@@ -362,17 +362,19 @@ class TextToSpeech:
     VOICES = {
         'en': {
             'am_michael': 'a',
+            'am_adam': 'a',
+            'am_eric': 'a',
             'af_heart': 'a',
             'af_bella': 'a',
             'af_nicole': 'a',
-            'am_adam': 'a',
-            'am_eric': 'a',
         },
         'hi': {
             'hm_omega': 'h',
         },
         'hinglish': {
             'am_michael': 'a',
+            'am_adam': 'a',
+            'am_eric': 'a',
             'hm_omega': 'h',
         },
     }

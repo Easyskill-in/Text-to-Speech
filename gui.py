@@ -301,7 +301,10 @@ class TTSApp:
                 "Omega (Male)": ("hm_omega", "h"),
             },
             "hinglish": {
-                "Michael + Omega": ("am_michael", "hinglish"),
+                "Michael (Male)": ("am_michael", "hinglish"),
+                "Adam (Male)": ("am_adam", "hinglish"),
+                "Eric (Male)": ("am_eric", "hinglish"),
+                "Omega (Male, Hindi)": ("hm_omega", "hinglish"),
             },
         }
 
